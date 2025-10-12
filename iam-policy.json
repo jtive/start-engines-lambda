@@ -1,0 +1,77 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ECSTaskManagement",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:RunTask",
+        "ecs:DescribeTasks",
+        "ecs:DescribeTaskDefinition",
+        "ecs:StopTask"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "ecs:cluster": [
+            "arn:aws:ecs:us-east-2:486151888818:cluster/auth-cluster",
+            "arn:aws:ecs:us-east-2:486151888818:cluster/pdf-cluster",
+            "arn:aws:ecs:us-east-2:486151888818:cluster/fa-cluster",
+            "arn:aws:ecs:us-east-2:486151888818:cluster/users-cluster",
+            "arn:aws:ecs:us-east-2:486151888818:cluster/batch-cluster"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "ECSPassRole",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "*",
+      "Condition": {
+        "StringLike": {
+          "iam:PassedToService": "ecs-tasks.amazonaws.com"
+        }
+      }
+    },
+    {
+      "Sid": "TargetGroupManagement",
+      "Effect": "Allow",
+      "Action": [
+        "elasticloadbalancing:RegisterTargets",
+        "elasticloadbalancing:DeregisterTargets",
+        "elasticloadbalancing:DescribeTargetHealth",
+        "elasticloadbalancing:DescribeTargetGroups",
+        "elasticloadbalancing:DescribeTargetGroupAttributes"
+      ],
+      "Resource": [
+        "arn:aws:elasticloadbalancing:us-east-2:486151888818:targetgroup/auth-lb/*",
+        "arn:aws:elasticloadbalancing:us-east-2:486151888818:targetgroup/pdf-lb/*",
+        "arn:aws:elasticloadbalancing:us-east-2:486151888818:targetgroup/fa2-tg/*",
+        "arn:aws:elasticloadbalancing:us-east-2:486151888818:targetgroup/users-tg/*",
+        "arn:aws:elasticloadbalancing:us-east-2:486151888818:targetgroup/batch-tg/*"
+      ]
+    },
+    {
+      "Sid": "EC2NetworkInterface",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeNetworkInterfaces",
+        "ec2:DescribeSubnets",
+        "ec2:DescribeSecurityGroups"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "CloudWatchLogs",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": "arn:aws:logs:us-east-2:486151888818:log-group:/aws/lambda/start-engines-lambda:*"
+    }
+  ]
+}
+

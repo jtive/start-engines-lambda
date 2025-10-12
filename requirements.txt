@@ -1,0 +1,14 @@
+# AWS SDK for Python
+boto3>=1.28.0
+
+# Testing
+pytest>=7.4.0
+pytest-cov>=4.1.0
+pytest-mock>=3.11.0
+moto>=4.2.0  # Mock AWS services for testing
+
+# Development
+black>=23.7.0  # Code formatter
+flake8>=6.1.0  # Linter
+mypy>=1.5.0    # Type checker
+

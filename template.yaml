@@ -1,0 +1,223 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: ECS Task Starter Lambda - Starts ECS tasks and registers with target groups
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    Description: Environment name
+  
+  # Network Configuration
+  TaskSubnets:
+    Type: CommaDelimitedList
+    Description: Comma-separated list of subnet IDs for ECS tasks
+  
+  TaskSecurityGroups:
+    Type: CommaDelimitedList
+    Description: Comma-separated list of security group IDs for ECS tasks
+  
+  # Target Group ARNs for new services (users, batch)
+  UsersTargetGroupArn:
+    Type: String
+    Description: Target Group ARN for UserManagement service
+    Default: ""
+  
+  BatchTargetGroupArn:
+    Type: String
+    Description: Target Group ARN for BatchEngineCall service
+    Default: ""
+  
+  # ECS Cluster Names (optional overrides)
+  AuthCluster:
+    Type: String
+    Default: auth-cluster
+  
+  PdfCluster:
+    Type: String
+    Default: pdf-cluster
+  
+  FaCluster:
+    Type: String
+    Default: fa-cluster
+  
+  UsersCluster:
+    Type: String
+    Default: users-cluster
+  
+  BatchCluster:
+    Type: String
+    Default: batch-cluster
+  
+  # Task Definitions (optional overrides)
+  AuthTaskDefinition:
+    Type: String
+    Default: auth-api-task
+  
+  PdfTaskDefinition:
+    Type: String
+    Default: pdf-creator-task
+  
+  FaTaskDefinition:
+    Type: String
+    Default: fa-engine-task
+  
+  UsersTaskDefinition:
+    Type: String
+    Default: user-management-task
+  
+  BatchTaskDefinition:
+    Type: String
+    Default: batch-engine-task
+
+Globals:
+  Function:
+    Timeout: 300  # 5 minutes to allow for task startup
+    MemorySize: 256
+    Runtime: python3.12
+    Architectures:
+      - x86_64
+
+Resources:
+  # Lambda Function
+  StartEnginesFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub start-engines-lambda-${Environment}
+      CodeUri: .
+      Handler: lambda_function.lambda_handler
+      Description: Starts ECS tasks and registers with target groups
+      Environment:
+        Variables:
+          AWS_REGION: !Ref AWS::Region
+          AWS_ACCOUNT_ID: !Ref AWS::AccountId
+          
+          # Network configuration
+          SUBNETS: !Join [',', !Ref TaskSubnets]
+          SECURITY_GROUPS: !Join [',', !Ref TaskSecurityGroups]
+          
+          # ECS Clusters
+          AUTH_CLUSTER: !Ref AuthCluster
+          PDF_CLUSTER: !Ref PdfCluster
+          FA_CLUSTER: !Ref FaCluster
+          USERS_CLUSTER: !Ref UsersCluster
+          BATCH_CLUSTER: !Ref BatchCluster
+          
+          # Task Definitions
+          AUTH_TASK_DEF: !Ref AuthTaskDefinition
+          PDF_TASK_DEF: !Ref PdfTaskDefinition
+          FA_TASK_DEF: !Ref FaTaskDefinition
+          USERS_TASK_DEF: !Ref UsersTaskDefinition
+          BATCH_TASK_DEF: !Ref BatchTaskDefinition
+          
+          # Target Group ARNs
+          USERS_TARGET_GROUP_ARN: !Ref UsersTargetGroupArn
+          BATCH_TARGET_GROUP_ARN: !Ref BatchTargetGroupArn
+          
+          # Configuration
+          LAUNCH_TYPE: FARGATE
+          ASSIGN_PUBLIC_IP: ENABLED
+          TASK_WAIT_TIMEOUT: '300'
+          TASK_POLL_INTERVAL: '5'
+          LOG_LEVEL: INFO
+      
+      Role: !GetAtt LambdaExecutionRole.Arn
+      
+      # EventBridge trigger
+      Events:
+        StartTaskEvent:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - custom.app
+              detail-type:
+                - Start ECS Task
+  
+  # Lambda Execution Role
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub start-engines-lambda-role-${Environment}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: ECSTaskManagement
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ECSTaskManagement
+                Effect: Allow
+                Action:
+                  - ecs:RunTask
+                  - ecs:DescribeTasks
+                  - ecs:DescribeTaskDefinition
+                  - ecs:StopTask
+                Resource: '*'
+              
+              - Sid: ECSPassRole
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: '*'
+                Condition:
+                  StringLike:
+                    iam:PassedToService: ecs-tasks.amazonaws.com
+              
+              - Sid: TargetGroupManagement
+                Effect: Allow
+                Action:
+                  - elasticloadbalancing:RegisterTargets
+                  - elasticloadbalancing:DeregisterTargets
+                  - elasticloadbalancing:DescribeTargetHealth
+                  - elasticloadbalancing:DescribeTargetGroups
+                  - elasticloadbalancing:DescribeTargetGroupAttributes
+                Resource:
+                  - !Sub 'arn:aws:elasticloadbalancing:${AWS::Region}:${AWS::AccountId}:targetgroup/auth-lb/*'
+                  - !Sub 'arn:aws:elasticloadbalancing:${AWS::Region}:${AWS::AccountId}:targetgroup/pdf-lb/*'
+                  - !Sub 'arn:aws:elasticloadbalancing:${AWS::Region}:${AWS::AccountId}:targetgroup/fa2-tg/*'
+                  - !Sub 'arn:aws:elasticloadbalancing:${AWS::Region}:${AWS::AccountId}:targetgroup/users-tg/*'
+                  - !Sub 'arn:aws:elasticloadbalancing:${AWS::Region}:${AWS::AccountId}:targetgroup/batch-tg/*'
+              
+              - Sid: EC2NetworkInterface
+                Effect: Allow
+                Action:
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeSecurityGroups
+                Resource: '*'
+  
+  # CloudWatch Log Group
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/start-engines-lambda-${Environment}
+      RetentionInDays: 30
+
+Outputs:
+  StartEnginesFunctionArn:
+    Description: ARN of the Lambda function
+    Value: !GetAtt StartEnginesFunction.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-FunctionArn
+  
+  LambdaExecutionRoleArn:
+    Description: ARN of the Lambda execution role
+    Value: !GetAtt LambdaExecutionRole.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-RoleArn
+  
+  EventBridgeRuleName:
+    Description: Name of the EventBridge rule
+    Value: !Sub start-engines-lambda-${Environment}-StartTaskEvent-Rule
+

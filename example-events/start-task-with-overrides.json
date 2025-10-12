@@ -1,0 +1,14 @@
+{
+  "source": "custom.app",
+  "detail-type": "Start ECS Task",
+  "detail": {
+    "service": "auth",
+    "cluster": "custom-cluster",
+    "taskDefinition": "custom-task-def:5",
+    "subnets": ["subnet-custom123"],
+    "securityGroups": ["sg-custom456"],
+    "port": 9090,
+    "waitForHealthy": true
+  }
+}
+
