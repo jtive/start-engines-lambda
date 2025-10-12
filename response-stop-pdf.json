@@ -1,0 +1,1 @@
+{"statusCode": 200, "body": {"message": "Successfully stopped 0 tasks across 1 services", "total_tasks_stopped": 0, "services_processed": 1, "results": [{"service": "pdf", "status": "error", "error": "An error occurred (ClusterNotFoundException) when calling the ListTasks operation: Cluster not found."}]}}

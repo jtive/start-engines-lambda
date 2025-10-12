@@ -1,0 +1,9 @@
+{
+  "source": "custom.app",
+  "detail-type": "Stop ECS Tasks",
+  "detail": {
+    "services": ["auth"],
+    "deregister_targets": true
+  }
+}
+

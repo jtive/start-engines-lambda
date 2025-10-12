@@ -1,0 +1,8 @@
+{
+  "source": "custom.app",
+  "detail-type": "Start ECS Task",
+  "detail": {
+    "service": "users"
+  }
+}
+

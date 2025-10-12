@@ -1,30 +1,45 @@
-# ECS Task Starter Lambda
+# ECS Task Management Lambdas
 
-A production-ready Python Lambda function that automatically starts ECS tasks and registers them with Application Load Balancer target groups when triggered by EventBridge events.
+Two production-ready Python Lambda functions that provide complete ECS task lifecycle management:
+- **Start Lambda**: Starts ECS tasks and registers them with Application Load Balancer target groups
+- **Stop Lambda**: Stops all ECS tasks and deregisters them from target groups
 
 ## ✨ Features
 
+### Start Lambda (`start-engines-lambda`)
 - 🚀 **Automatic ECS Task Management**: Starts tasks and waits for RUNNING state
 - 🎯 **Target Group Registration**: Automatically registers tasks with ALB target groups
-- 🔧 **Multi-Service Support**: Pre-configured for 5 microservices (AuthAPI, PDFCreator, FaEngine, UserManagement, BatchEngineCall)
-- ⚙️ **Flexible Configuration**: Support for environment variables and event-level overrides
+- 🔧 **Multi-Service Support**: Pre-configured for 5 microservices
+- ⚙️ **Flexible Configuration**: Event-level overrides supported
+
+### Stop Lambda (`stop-engines-lambda`)
+- 🛑 **Batch Task Stopping**: Stop all or specific services at once
+- 🎯 **Target Group Deregistration**: Automatically deregisters targets
+- 💰 **Cost Savings**: Save up to $117/month in dev environments
+- ⏰ **Scheduling Support**: Optional auto-shutdown (nightly/weekly)
+
+### Common Features
 - 📊 **Comprehensive Logging**: CloudWatch integration with detailed execution logs
 - 🧪 **Fully Tested**: Unit tests with mocked AWS services
-- 💰 **Cost Optimized**: Includes guide to reduce ALB costs by 87%
+- 💰 **Cost Optimized**: Combined ALB + task scheduling savings = **$292/month**
 
 ## 🏗️ Architecture
 
+### Start Lambda Flow
 ```
-EventBridge → Lambda → ECS (start task) → Wait for RUNNING → Get IP → Register with Target Group
+EventBridge → Start Lambda → ECS (start task) → Wait for RUNNING → Get IP → Register with Target Group
 ```
 
-This Lambda function:
-1. ✅ Receives events from EventBridge (default event bus)
-2. ✅ Starts exactly 1 ECS task in specified cluster
-3. ✅ Waits for task to reach RUNNING state (with timeout)
-4. ✅ Extracts task's private IP address (awsvpc mode)
-5. ✅ Registers IP with specified target group
-6. ✅ Returns detailed status including health check info
+### Stop Lambda Flow
+```
+EventBridge/Schedule → Stop Lambda → List Running Tasks → Stop Tasks → Deregister IPs from Target Groups
+```
+
+### Complete Lifecycle
+1. ✅ **Start**: Receive event → Start task → Wait for RUNNING → Register with target group
+2. ✅ **Stop**: Receive event → List tasks → Stop all tasks → Deregister from target groups
+3. ✅ **Monitoring**: CloudWatch Logs + Target health checks
+4. ✅ **Cost Optimization**: Unified ALB + scheduled stops = **$292/month savings**
 
 ## 📋 Prerequisites
 
@@ -64,34 +79,38 @@ export USERS_TARGET_GROUP_ARN="arn:aws:elasticloadbalancing:us-east-2:4861518888
 export BATCH_TARGET_GROUP_ARN="arn:aws:elasticloadbalancing:us-east-2:486151888818:targetgroup/batch-tg/xxx"
 ```
 
-### 3. Deploy
+### 3. Deploy Both Lambdas
 
 ```bash
-# Build
+# Deploy Start Lambda
 sam build
-
-# Deploy (first time with guided setup)
 sam deploy --guided
 
-# Or use deployment script
-chmod +x deploy.sh
-./deploy.sh dev
+# Deploy Stop Lambda
+sam build --template template-stop.yaml
+sam deploy \
+    --template-file .aws-sam/build/template.yaml \
+    --stack-name stop-engines-lambda-dev \
+    --region us-east-2 \
+    --capabilities CAPABILITY_NAMED_IAM \
+    --parameter-overrides Environment=dev TaskSubnets="..." TaskSecurityGroups="..."
 ```
 
 ### 4. Test
 
 ```bash
-# Test with CLI
-chmod +x test-lambda.sh
+# Start a service
 ./test-lambda.sh dev auth
 
-# Or send EventBridge event
-aws events put-events \
-    --entries '[{
-        "Source": "custom.app",
-        "DetailType": "Start ECS Task",
-        "Detail": "{\"service\":\"auth\"}"
-    }]'
+# Stop all services
+./stop-all-tasks.sh dev
+
+# Or use EventBridge
+aws events put-events --entries '[{
+    "Source": "custom.app",
+    "DetailType": "Start ECS Task",
+    "Detail": "{\"service\":\"auth\"}"
+}]'
 ```
 
 ## 📝 Event Format
@@ -134,9 +153,18 @@ aws events put-events \
 
 ## 📚 Documentation
 
-- **[DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md)** - Complete implementation plan and architecture decisions
+### Quick Reference
+- **[COMPLETE_PROJECT_SUMMARY.md](COMPLETE_PROJECT_SUMMARY.md)** - 🌟 **START HERE** - Complete overview
+- **[START_STOP_COMPARISON.md](START_STOP_COMPARISON.md)** - Compare both lambdas and workflows
+- **[QUICK_START_SUMMARY.md](QUICK_START_SUMMARY.md)** - Quick command reference
+
+### Detailed Guides
 - **[DEPLOYMENT_INSTRUCTIONS.md](DEPLOYMENT_INSTRUCTIONS.md)** - Step-by-step deployment guide
-- **[COST_OPTIMIZATION_GUIDE.md](COST_OPTIMIZATION_GUIDE.md)** - Save $175/month by using single ALB with path routing
+- **[STOP_LAMBDA_GUIDE.md](STOP_LAMBDA_GUIDE.md)** - Stop Lambda usage and scheduling
+- **[COST_OPTIMIZATION_GUIDE.md](COST_OPTIMIZATION_GUIDE.md)** - Save $175/month with unified ALB
+- **[UNIFIED_ALB_COMPLETE.md](UNIFIED_ALB_COMPLETE.md)** - Unified ALB migration guide
+- **[SETUP_ECS_RESOURCES.md](SETUP_ECS_RESOURCES.md)** - ECS cluster setup
+- **[DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md)** - Original implementation plan
 
 ## 🧪 Testing
 
@@ -187,36 +215,57 @@ See [iam-policy.json](iam-policy.json) for complete policy.
 
 ## 💰 Cost Optimization
 
+### Infrastructure Savings (Unified ALB)
 **Problem**: 5 separate ALBs = ~$200/month  
 **Solution**: 1 ALB with path-based routing = ~$20/month  
 **Savings**: **$175/month (87% reduction)**
 
-See [COST_OPTIMIZATION_GUIDE.md](COST_OPTIMIZATION_GUIDE.md) for implementation details.
+### Task Management Savings (Stop Lambda)
+**Problem**: ECS tasks running 24/7 = $150/month  
+**Solution**: Auto-stop during off-hours (business hours only) = $42/month  
+**Savings**: **$108/month (72% reduction)**
+
+### Total Potential Savings: **$292/month = $3,504/year** 🎉
+
+See [COST_OPTIMIZATION_GUIDE.md](COST_OPTIMIZATION_GUIDE.md) and [STOP_LAMBDA_GUIDE.md](STOP_LAMBDA_GUIDE.md) for details.
 
 ## 📁 Project Structure
 
 ```
 start-engines-lambda/
-├── lambda_function.py          # Main Lambda handler
-├── ecs_handler.py              # ECS task management
-├── target_group_handler.py     # Target group registration
-├── config.py                   # Service configuration
-├── requirements.txt            # Python dependencies
-├── template.yaml               # SAM/CloudFormation template
-├── iam-policy.json            # IAM permissions
-├── deploy.sh                   # Deployment script
-├── test-lambda.sh             # Testing script
-├── tests/                      # Unit tests
-│   ├── test_lambda_function.py
-│   └── test_config.py
-├── example-events/             # Sample EventBridge events
-│   ├── start-auth-task.json
-│   ├── start-pdf-task.json
-│   └── start-fa-task.json
-├── DEVELOPMENT_PLAN.md         # Implementation roadmap
-├── DEPLOYMENT_INSTRUCTIONS.md  # Deployment guide
-├── COST_OPTIMIZATION_GUIDE.md  # ALB cost savings
-└── README.md                   # This file
+├── 📄 START LAMBDA
+│   ├── lambda_function.py          # Main start handler
+│   ├── ecs_handler.py              # ECS task management
+│   ├── target_group_handler.py     # Target group registration
+│   ├── config.py                   # Service configuration
+│   ├── template.yaml               # Start Lambda SAM template
+│   └── deploy.sh                   # Start Lambda deployment
+├── 📄 STOP LAMBDA
+│   ├── stop_engines_lambda.py      # Main stop handler
+│   ├── template-stop.yaml          # Stop Lambda SAM template
+│   ├── deploy-stop-lambda.sh       # Stop Lambda deployment
+│   └── stop-all-tasks.sh           # Stop Lambda test script
+├── 📄 CONFIGURATION
+│   ├── requirements.txt            # Python dependencies
+│   ├── samconfig.toml              # SAM deployment config
+│   ├── iam-policy.json             # IAM permissions
+│   └── .gitignore                  # Git ignore rules
+├── 📄 EXAMPLE EVENTS
+│   ├── start-auth-task.json        # Start service examples
+│   ├── stop-all-tasks.json         # Stop service examples
+│   └── ...
+├── 📄 TESTS
+│   ├── tests/test_lambda_function.py
+│   └── tests/test_config.py
+└── 📄 DOCUMENTATION
+    ├── README.md                   # This file
+    ├── COMPLETE_PROJECT_SUMMARY.md # 🌟 START HERE
+    ├── START_STOP_COMPARISON.md    # Compare both lambdas
+    ├── STOP_LAMBDA_GUIDE.md        # Stop Lambda guide
+    ├── COST_OPTIMIZATION_GUIDE.md  # ALB savings ($175/mo)
+    ├── UNIFIED_ALB_COMPLETE.md     # Unified ALB setup
+    ├── DEPLOYMENT_INSTRUCTIONS.md  # Deployment guide
+    └── ... (see full list in COMPLETE_PROJECT_SUMMARY.md)
 ```
 
 ## 🔧 Configuration
