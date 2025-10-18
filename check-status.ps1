@@ -16,7 +16,7 @@ Write-Host ""
 # Service to cluster mapping
 $services = @{
     "auth" = @{ cluster = "authapi-cluster"; targetGroup = "arn:aws:elasticloadbalancing:us-east-2:486151888818:targetgroup/unified-auth-tg/cecaa72dcd652062"; port = 8080 }
-    "pdf" = @{ cluster = "pdfcreator-cluster"; targetGroup = "arn:aws:elasticloadbalancing:us-east-2:486151888818:targetgroup/unified-pdf-tg/c608c00789aa70a9"; port = 9080 }
+    "pdf" = @{ cluster = "pdfcreator-cluster"; targetGroup = "arn:aws:elasticloadbalancing:us-east-2:486151888818:targetgroup/unified-pdf-tg/c608c00789aa70a9"; port = 80 }
     "fa" = @{ cluster = "fa-engine-cluster"; targetGroup = "arn:aws:elasticloadbalancing:us-east-2:486151888818:targetgroup/unified-fa-tg/c1c35818b5273bfc"; port = 2531 }
     "users" = @{ cluster = "user-management-cluster"; targetGroup = "arn:aws:elasticloadbalancing:us-east-2:486151888818:targetgroup/users-tg/f9a22b2edc13281f"; port = 8080 }
     "batch" = @{ cluster = "batch-engine"; targetGroup = "arn:aws:elasticloadbalancing:us-east-2:486151888818:targetgroup/batch-tg/4016a351002f823f"; port = 8080 }

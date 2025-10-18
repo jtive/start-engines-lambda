@@ -8,7 +8,10 @@
 | **stop-all-services.ps1** | Stop all ECS services | `.\stop-all-services.ps1` |
 | **start-single-service.ps1** | Start a single service | `.\start-single-service.ps1 -Service auth` |
 | **stop-single-service.ps1** | Stop a single service | `.\stop-single-service.ps1 -Service auth` |
+| **verify-and-update-target-groups.ps1** | ⭐ Verify tasks running & update target groups | `.\verify-and-update-target-groups.ps1` |
 | **check-services-status.ps1** | Check status of all services | `.\check-services-status.ps1` |
+
+> ⚠️ **Important**: `start-all-services.ps1` can have race conditions with target group registration. For production deployments, use `verify-and-update-target-groups.ps1` after starting services. See [TARGET_GROUP_VERIFICATION_GUIDE.md](TARGET_GROUP_VERIFICATION_GUIDE.md) for details.
 
 ---
 
@@ -73,6 +76,21 @@
 .\check-services-status.ps1 -Region us-west-2
 ```
 
+### 6. Verify and Update Target Groups (Recommended for Production)
+```powershell
+# Verify running tasks and update target groups safely
+.\verify-and-update-target-groups.ps1
+
+# Skip health check verification (faster)
+.\verify-and-update-target-groups.ps1 -SkipHealthCheck
+
+# Verify specific services only
+.\verify-and-update-target-groups.ps1 -Services auth,pdf
+
+# With custom timeouts
+.\verify-and-update-target-groups.ps1 -MaxWaitSeconds 600 -HealthCheckWaitSeconds 180
+```
+
 ---
 
 ## 📊 Script Parameters
@@ -120,9 +138,36 @@
     -Environment "dev"               # Environment name (default: dev)
 ```
 
+### verify-and-update-target-groups.ps1
+```powershell
+.\verify-and-update-target-groups.ps1 `
+    -Environment "dev" `             # Environment name (default: dev)
+    -Region "us-east-2" `            # AWS region (default: us-east-2)
+    -Services @("auth", "pdf") `     # Services to verify (default: all)
+    -MaxWaitSeconds 300 `            # Max wait for tasks to be RUNNING (default: 300s)
+    -HealthCheckWaitSeconds 120 `    # Max wait for targets to be healthy (default: 120s)
+    -SkipHealthCheck `               # Skip waiting for health checks
+    -Force                           # Skip confirmation prompt
+```
+
 ---
 
 ## 🎯 Common Workflows
+
+### Production Start (Recommended)
+```powershell
+# Start all services
+.\start-all-services.ps1 -Force
+
+# Wait for tasks to stabilize
+Start-Sleep -Seconds 60
+
+# Verify and update target groups
+.\verify-and-update-target-groups.ps1 -Force
+
+# Check final status
+.\check-services-status.ps1
+```
 
 ### Daily Development Workflow
 ```powershell
@@ -158,6 +203,18 @@ Start-Sleep -Seconds 30
 
 # Check status
 .\check-services-status.ps1
+```
+
+### Fix Target Group Issues
+```powershell
+# If tasks are running but target groups are wrong
+.\verify-and-update-target-groups.ps1 -Force
+
+# Fix specific services only
+.\verify-and-update-target-groups.ps1 -Services auth,pdf -Force
+
+# Quick fix without health check wait
+.\verify-and-update-target-groups.ps1 -SkipHealthCheck -Force
 ```
 
 ---
@@ -414,6 +471,8 @@ winget install Amazon.AWSCLI
 
 ## 📚 Additional Resources
 
+- **[TARGET_GROUP_VERIFICATION_GUIDE.md](TARGET_GROUP_VERIFICATION_GUIDE.md)** - ⭐ Complete target group verification guide
+- **[QUICK_REFERENCE_TARGET_GROUPS.md](QUICK_REFERENCE_TARGET_GROUPS.md)** - ⚡ Quick reference for target group scripts
 - **[STOP_LAMBDA_GUIDE.md](STOP_LAMBDA_GUIDE.md)** - Detailed stop lambda guide
 - **[START_STOP_COMPARISON.md](START_STOP_COMPARISON.md)** - Compare both lambdas
 - **[COMPLETE_PROJECT_SUMMARY.md](COMPLETE_PROJECT_SUMMARY.md)** - Complete overview
