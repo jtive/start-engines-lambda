@@ -8,6 +8,15 @@ param(
     [switch]$Force  # Skip confirmation
 )
 
+# Map each service to its cluster and service name
+$ServiceClusterMap = @{
+    "auth"  = @{ cluster = "authapi-cluster"; service = "authapi-service" }
+    "pdf"   = @{ cluster = "pdfcreator-cluster"; service = "pdfcreator-service" }
+    "fa"    = @{ cluster = "fa-engine-cluster"; service = "fa-engine-service" }
+    "users" = @{ cluster = "user-management-cluster"; service = "user-management-service" }
+    "batch" = @{ cluster = "batch-engine"; service = "batch-engine-service" }
+}
+
 Write-Host "========================================" -ForegroundColor Green
 Write-Host "Start All ECS Services" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Green
@@ -34,46 +43,35 @@ $results = @()
 foreach ($service in $Services) {
     Write-Host "Starting $service..." -ForegroundColor Cyan
     
-    $payloadFile = "$PSScriptRoot\example-events\start-$service-task.json"
-    $responseFile = "$PSScriptRoot\response-start-$service.json"
+    $serviceConfig = $ServiceClusterMap[$service]
+    $cluster = $serviceConfig.cluster
+    $serviceName = $serviceConfig.service
     
-    # Check if event file exists
-    if (-not (Test-Path $payloadFile)) {
-        Write-Host "  Warning: Event file not found: $payloadFile" -ForegroundColor Yellow
-        $results += [PSCustomObject]@{
-            Service = $service.ToUpper()
-            Status = "SKIPPED"
-            Message = "Event file not found"
-        }
-        continue
-    }
-    
-    # Invoke Lambda
-    aws lambda invoke `
-        --function-name $functionName `
-        --payload file://$payloadFile `
-        --cli-binary-format raw-in-base64-out `
-        --region $Region `
-        $responseFile 2>&1 | Out-Null
+    # Update ECS service desired count to 1
+    Write-Host "  Updating service desired count to 1 in cluster $cluster..." -ForegroundColor Cyan
+    $updateOutput = aws ecs update-service `
+        --cluster $cluster `
+        --service $serviceName `
+        --desired-count 1 `
+        --region $Region 2>&1
     
     if ($LASTEXITCODE -eq 0) {
-        Write-Host "  Started successfully" -ForegroundColor Green
+        Write-Host "  Service started successfully" -ForegroundColor Green
         $results += [PSCustomObject]@{
             Service = $service.ToUpper()
+            Cluster = $cluster
             Status = "STARTED"
-            Message = "Task started"
+            Message = "Desired count set to 1"
         }
     } else {
-        Write-Host "  Failed to start" -ForegroundColor Red
+        Write-Host "  Error starting service: $updateOutput" -ForegroundColor Red
         $results += [PSCustomObject]@{
             Service = $service.ToUpper()
+            Cluster = $cluster
             Status = "FAILED"
-            Message = "Lambda invocation failed"
+            Message = "Failed to update desired count"
         }
     }
-    
-    # Cleanup response file
-    Remove-Item $responseFile -ErrorAction SilentlyContinue
     
     # Small delay between starts
     Start-Sleep -Seconds 2

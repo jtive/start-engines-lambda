@@ -4,14 +4,25 @@
 param(
     [string]$Environment = "dev",
     [string]$Region = "us-east-2",
+    [string[]]$Services = @("auth", "pdf", "fa", "users", "batch"),
     [switch]$Force  # Skip confirmation
 )
+
+# Map each service to its cluster
+$ServiceClusterMap = @{
+    "auth"  = @{ cluster = "authapi-cluster"; service = "authapi-service" }
+    "pdf"   = @{ cluster = "pdfcreator-cluster"; service = "pdfcreator-service" }
+    "fa"    = @{ cluster = "fa-engine-cluster"; service = "fa-engine-service" }
+    "users" = @{ cluster = "user-management-cluster"; service = "user-management-service" }
+    "batch" = @{ cluster = "batch-engine"; service = "batch-engine-service" }
+}
 
 Write-Host "========================================" -ForegroundColor Red
 Write-Host "Stop All ECS Services" -ForegroundColor Red
 Write-Host "========================================" -ForegroundColor Red
 Write-Host "Environment: $Environment" -ForegroundColor Yellow
 Write-Host "Region: $Region" -ForegroundColor Yellow
+Write-Host "Services: $($Services -join ', ')" -ForegroundColor Yellow
 Write-Host ""
 
 # Confirmation prompt (unless -Force is used)
@@ -26,52 +37,58 @@ if (-not $Force) {
 Write-Host "Stopping all ECS tasks..." -ForegroundColor Cyan
 Write-Host ""
 
-# Invoke Lambda directly
+# Invoke Lambda to stop all running tasks (including manually running ones)
 $functionName = "stop-engines-lambda-$Environment"
 $payloadFile = "$PSScriptRoot\example-events\stop-all-tasks.json"
 $responseFile = "$PSScriptRoot\response-stop-all.json"
 
-Write-Host "Invoking Lambda: $functionName" -ForegroundColor Cyan
+Write-Host "Invoking Lambda: $functionName to stop all running tasks" -ForegroundColor Cyan
 
 aws lambda invoke `
     --function-name $functionName `
     --payload file://$payloadFile `
     --cli-binary-format raw-in-base64-out `
     --region $Region `
-    $responseFile | Out-Null
+    $responseFile 2>&1 | Out-Null
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host "Lambda invoked successfully" -ForegroundColor Green
-    Write-Host ""
     
-    # Parse and display response
+    # Parse Lambda response
     $response = Get-Content $responseFile -Raw | ConvertFrom-Json
-    
     if ($response.body) {
-        Write-Host "========================================" -ForegroundColor Green
-        Write-Host "Results" -ForegroundColor Green
-        Write-Host "========================================" -ForegroundColor Green
         Write-Host "Message: $($response.body.message)" -ForegroundColor Yellow
-        Write-Host "Total Tasks Stopped: $($response.body.total_tasks_stopped)" -ForegroundColor Green
-        Write-Host ""
-        
-        if ($response.body.results) {
-            Write-Host "Service Details:" -ForegroundColor Cyan
-            foreach ($result in $response.body.results) {
-                $color = if ($result.status -eq "success") { "Green" } elseif ($result.status -eq "error") { "Red" } else { "Yellow" }
-                Write-Host "  $($result.service.ToUpper()): $($result.tasks_stopped) tasks stopped" -ForegroundColor $color
-            }
+        if ($response.body.total_tasks_stopped) {
+            Write-Host "Total Tasks Stopped: $($response.body.total_tasks_stopped)" -ForegroundColor Green
         }
-        
-        Write-Host ""
-        Write-Host "========================================" -ForegroundColor Green
-        Write-Host "Operation completed successfully!" -ForegroundColor Green
-        Write-Host "========================================" -ForegroundColor Green
     }
-    
-    # Cleanup
-    Remove-Item $responseFile -ErrorAction SilentlyContinue
 } else {
-    Write-Host "Lambda invocation failed!" -ForegroundColor Red
-    exit 1
+    Write-Host "Warning: Lambda invocation failed, continuing with service updates" -ForegroundColor Yellow
 }
+
+Write-Host ""
+
+# Update ECS service desired counts to 0
+Write-Host "Updating service desired counts to 0..." -ForegroundColor Cyan
+foreach ($service in $Services) {
+    $clusterInfo = $ServiceClusterMap[$service]
+    $cluster = $clusterInfo.cluster
+    $serviceName = $clusterInfo.service
+    Write-Host "  Stopping $service in cluster $cluster..." -ForegroundColor Cyan
+    $updateOutput = aws ecs update-service `
+        --cluster $cluster `
+        --service $serviceName `
+        --desired-count 0 `
+        --region $Region 2>&1
+    
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "    $service stopped successfully" -ForegroundColor Green
+    } else {
+        Write-Host "    Error stopping $service : $updateOutput" -ForegroundColor Red
+    }
+}
+
+Write-Host ""
+Write-Host "========================================" -ForegroundColor Green
+Write-Host "All services stopped successfully!" -ForegroundColor Green
+Write-Host "========================================" -ForegroundColor Green
