@@ -24,7 +24,10 @@ $serviceConfigs = @{
     }
     "fa" = @{
         cluster = "fa-engine-cluster"
-        targetGroupArn = "arn:aws:elasticloadbalancing:us-east-2:486151888818:targetgroup/unified-fa-tg/c1c35818b5273bfc"
+        targetGroupArns = @(
+            "arn:aws:elasticloadbalancing:us-east-2:486151888818:targetgroup/unified-fa-tg/c1c35818b5273bfc",
+            "arn:aws:elasticloadbalancing:us-east-2:486151888818:targetgroup/fa-engine-tg/dbcce8724f4dc4bd"
+        )
         port = 2531
     }
     "users" = @{
@@ -69,7 +72,7 @@ foreach ($serviceName in $Services) {
     Write-Host "========================================" -ForegroundColor Cyan
     
     # Step 1: Get running task from ECS
-    Write-Host "[1/4] Getting running tasks from cluster..." -ForegroundColor Gray
+    Write-Host "[1/5] Getting running tasks from cluster..." -ForegroundColor Gray
     
     $listTasksResult = aws ecs list-tasks --cluster $config.cluster --desired-status RUNNING --region $Region 2>&1 | ConvertFrom-Json
     
@@ -132,99 +135,126 @@ foreach ($serviceName in $Services) {
     Write-Host "  Found running task: $taskId" -ForegroundColor Green
     Write-Host "  Task IP: $taskIp" -ForegroundColor Green
     
-    # Step 2: Check current target group state
-    Write-Host "[2/4] Checking target group..." -ForegroundColor Gray
+    # Determine which target group ARNs to sync to
+    $targetGroupArnsToSync = @()
+    if ($null -ne $config.targetGroupArns) {
+        $targetGroupArnsToSync = $config.targetGroupArns
+        Write-Host "  Using multiple target groups" -ForegroundColor Gray
+    } elseif ($null -ne $config.targetGroupArn) {
+        $targetGroupArnsToSync = @($config.targetGroupArn)
+        Write-Host "  Using single target group" -ForegroundColor Gray
+    } else {
+        Write-Host "  ERROR: No target group configured for service $serviceName" -ForegroundColor Red
+        continue
+    }
     
-    $targetHealth = aws elbv2 describe-target-health --target-group-arn $config.targetGroupArn --region $Region 2>&1 | ConvertFrom-Json
-    $currentTargets = $targetHealth.TargetHealthDescriptions
+    Write-Host "  Syncing to $($targetGroupArnsToSync.Count) target group(s)" -ForegroundColor Gray
     
-    Write-Host "  Current targets in group: $($currentTargets.Count)" -ForegroundColor Gray
-    
-    # Step 3: Remove unhealthy or wrong targets
-    Write-Host "[3/4] Cleaning up target group..." -ForegroundColor Gray
-    
-    $deregistered = 0
-    $drainingCount = 0
-    
-    foreach ($target in $currentTargets) {
-        $targetIp = $target.Target.Id
-        $targetPort = $target.Target.Port
-        $targetState = $target.TargetHealth.State
+    # Step 2-4: Process each target group
+    $tgIndex = 0
+    foreach ($targetGroupArn in $targetGroupArnsToSync) {
+        $tgIndex++
+        $tgName = $targetGroupArn.Split('/')[-2]
+        Write-Host "[2-4/$($targetGroupArnsToSync.Count)] Processing target group: $tgName ($tgIndex/$($targetGroupArnsToSync.Count))" -ForegroundColor Gray
         
-        # Skip targets already draining
-        if ($targetState -eq "draining") {
-            Write-Host "  Target $targetIp`:$targetPort is draining (waiting...)" -ForegroundColor Gray
-            $drainingCount++
+        # Step 2: Check current target group state
+        Write-Host "  [2/4] Checking target group..." -ForegroundColor Gray
+        
+        $targetHealth = aws elbv2 describe-target-health --target-group-arn $targetGroupArn --region $Region 2>&1
+        
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "    ERROR: Failed to describe target health" -ForegroundColor Red
+            Write-Host "    AWS Error: $targetHealth" -ForegroundColor Red
             continue
         }
         
-        $shouldRemove = $false
-        $reason = ""
+        $targetHealthJson = $targetHealth | ConvertFrom-Json
+        $currentTargets = $targetHealthJson.TargetHealthDescriptions
         
-        # Remove if unhealthy
-        if ($targetState -eq "unhealthy") {
-            $shouldRemove = $true
-            $reason = "unhealthy"
-        }
-        # Remove if wrong IP
-        elseif ($targetIp -ne $taskIp) {
-            $shouldRemove = $true
-            $reason = "wrong IP ($targetIp vs $taskIp)"
-        }
-        # Remove if wrong port
-        elseif ($targetPort -ne $config.port) {
-            $shouldRemove = $true
-            $reason = "wrong port ($targetPort vs $($config.port))"
+        Write-Host "    Current targets in group: $($currentTargets.Count)" -ForegroundColor Gray
+        
+        # Step 3: Remove unhealthy or wrong targets
+        Write-Host "  [3/4] Cleaning up target group..." -ForegroundColor Gray
+        
+        $deregistered = 0
+        $drainingCount = 0
+        
+        foreach ($target in $currentTargets) {
+            $targetIp = $target.Target.Id
+            $targetPort = $target.Target.Port
+            $targetState = $target.TargetHealth.State
+            
+            # Skip targets already draining
+            if ($targetState -eq "draining") {
+                Write-Host "    Target $targetIp`:$targetPort is draining (waiting...)" -ForegroundColor Gray
+                $drainingCount++
+                continue
+            }
+            
+            $shouldRemove = $false
+            $reason = ""
+            
+            # Remove if unhealthy
+            if ($targetState -eq "unhealthy") {
+                $shouldRemove = $true
+                $reason = "unhealthy"
+            }
+            # Remove if wrong IP
+            elseif ($targetIp -ne $taskIp) {
+                $shouldRemove = $true
+                $reason = "wrong IP ($targetIp vs $taskIp)"
+            }
+            # Remove if wrong port
+            elseif ($targetPort -ne $config.port) {
+                $shouldRemove = $true
+                $reason = "wrong port ($targetPort vs $($config.port))"
+            }
+            
+            if ($shouldRemove) {
+                Write-Host "    Removing target $targetIp`:$targetPort ($reason)" -ForegroundColor Yellow
+                aws elbv2 deregister-targets --target-group-arn $targetGroupArn --targets Id=$targetIp,Port=$targetPort --region $Region 2>&1 | Out-Null
+                $deregistered++
+            } else {
+                Write-Host "    Target $targetIp`:$targetPort is $targetState (keeping)" -ForegroundColor Green
+            }
         }
         
-        if ($shouldRemove) {
-            Write-Host "  Removing target $targetIp`:$targetPort ($reason)" -ForegroundColor Yellow
-            aws elbv2 deregister-targets --target-group-arn $config.targetGroupArn --targets Id=$targetIp,Port=$targetPort --region $Region 2>&1 | Out-Null
-            $deregistered++
-        } else {
-            Write-Host "  Target $targetIp`:$targetPort is $targetState (keeping)" -ForegroundColor Green
+        if ($deregistered -eq 0 -and $drainingCount -eq 0) {
+            Write-Host "    No targets to remove" -ForegroundColor Gray
+        } elseif ($drainingCount -gt 0) {
+            Write-Host "    Note: $drainingCount target(s) still draining (will auto-remove)" -ForegroundColor Cyan
         }
-    }
-    
-    if ($deregistered -eq 0 -and $drainingCount -eq 0) {
-        Write-Host "  No targets to remove" -ForegroundColor Gray
-    } elseif ($drainingCount -gt 0) {
-        Write-Host "  Note: $drainingCount target(s) still draining (will auto-remove)" -ForegroundColor Cyan
-    }
-    
-    # Step 4: Register correct target if not already there
-    Write-Host "[4/4] Ensuring correct target is registered..." -ForegroundColor Gray
-    
-    $correctTargetExists = $false
-    foreach ($target in $currentTargets) {
-        # Only count non-draining targets
-        if ($target.Target.Id -eq $taskIp -and $target.Target.Port -eq $config.port -and $target.TargetHealth.State -ne "draining") {
-            $correctTargetExists = $true
-            Write-Host "  Correct target already registered (state: $($target.TargetHealth.State))" -ForegroundColor Green
-            break
-        }
-    }
-    
-    if (-not $correctTargetExists) {
-        Write-Host "  Registering target $taskIp`:$($config.port)" -ForegroundColor Cyan
-        aws elbv2 register-targets --target-group-arn $config.targetGroupArn --targets Id=$taskIp,Port=$($config.port) --region $Region 2>&1 | Out-Null
         
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "  Successfully registered!" -ForegroundColor Green
-            $action = "Registered"
-        } else {
-            Write-Host "  Failed to register" -ForegroundColor Red
-            $action = "Failed"
+        # Step 4: Register correct target if not already there
+        Write-Host "  [4/4] Ensuring correct target is registered..." -ForegroundColor Gray
+        
+        $correctTargetExists = $false
+        foreach ($target in $currentTargets) {
+            # Only count non-draining targets
+            if ($target.Target.Id -eq $taskIp -and $target.Target.Port -eq $config.port -and $target.TargetHealth.State -ne "draining") {
+                $correctTargetExists = $true
+                Write-Host "    Correct target already registered (state: $($target.TargetHealth.State))" -ForegroundColor Green
+                break
+            }
         }
-    } else {
-        $action = "Already registered"
+        
+        if (-not $correctTargetExists) {
+            Write-Host "    Registering target $taskIp`:$($config.port)" -ForegroundColor Cyan
+            aws elbv2 register-targets --target-group-arn $targetGroupArn --targets Id=$taskIp,Port=$($config.port) --region $Region 2>&1 | Out-Null
+            
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "    Successfully registered!" -ForegroundColor Green
+            } else {
+                Write-Host "    Failed to register" -ForegroundColor Red
+            }
+        }
     }
     
     $results += [PSCustomObject]@{
         Service = $serviceName.ToUpper()
         Status = "SYNCED"
         TaskIP = $taskIp
-        Action = $action
+        Action = "Multi-TG sync"
     }
     
     Write-Host ""
